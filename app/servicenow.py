@@ -1,5 +1,3 @@
-"""ServiceNow Table API write-back client (FR4)."""
-
 import logging
 
 import httpx
@@ -11,14 +9,12 @@ logger = logging.getLogger(__name__)
 
 
 def build_writeback_payload(decision: DecisionResponse) -> dict:
-    """Map a Gemini decision to a PATCH body (contract section 4.3)."""
     if decision.decision == "respond":
         return {
             "state": "6",
-            # NOTE: must be a valid sys_choice value for incident.close_code
-            # on the target PDI (e.g. "Solution provided"). Values like
-            # "Solved (Permanently)" are rejected by this PDI's Data Policy
-            # ("Resolution code is mandatory") with HTTP 403.
+            # close_code must be a real sys_choice value for incident.close_code
+            # on the target PDI. "Solved (Permanently)" is not one on ours and
+            # the resolve gets rejected (Data Policy: Resolution code mandatory).
             "close_code": "Solution provided",
             "close_notes": "Resolved automatically by AI Agent using Knowledge Base.",
             "comments": decision.message,
@@ -28,13 +24,8 @@ def build_writeback_payload(decision: DecisionResponse) -> dict:
     return {"work_notes": f"Escalated by AI Agent: {decision.message}"}
 
 
-def _base_url() -> str:
-    return (settings.SN_INSTANCE_URL or "").rstrip("/")
-
-
 async def patch_incident(sys_id: str, data: dict) -> None:
-    """PATCH /api/now/table/incident/{sys_id}. Raises on HTTP error."""
-    base = _base_url()
+    base = (settings.SN_INSTANCE_URL or "").rstrip("/")
     if not base or not settings.SN_USER or not settings.SN_PASSWORD:
         raise RuntimeError("ServiceNow credentials (SN_INSTANCE_URL/SN_USER/SN_PASSWORD) are not configured")
     url = f"{base}/api/now/table/incident/{sys_id}"

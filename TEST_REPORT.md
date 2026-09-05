@@ -7,23 +7,23 @@ Public endpoint: `https://abhorrently-threadless-reina.ngrok-free.dev` (ngrok, a
 
 | # | Test | Expected | Actual | Status |
 |---|------|----------|--------|--------|
-| T1 | Rule-based fallback decisions (no key): printer / vague email / leave | respond / ask / escalate | respond / ask / escalate | ✅ PASS |
-| T2 | Write-back payload mapping (respond/ask/escalate keys) | state+close_code+close_notes+comments / comments / work_notes | exact match | ✅ PASS |
-| T3 | Pydantic rejection of `priority: 9` | validation error | rejected | ✅ PASS |
-| T4 | Idempotency set (`mark_processed`/`is_duplicate`) | 2nd add returns False | confirmed | ✅ PASS |
-| T5 | KB articles load | 5 articles | 5 lines loaded | ✅ PASS |
-| T6 | `POST /webhook` first delivery (TestClient) | 202 in < 2 s | 202 in 0.053 s, background enqueued once | ✅ PASS |
-| T7 | `POST /webhook` duplicate delivery | 202 `{"status":"duplicate"}`, no re-processing | exact match | ✅ PASS |
-| T8 | Malformed payload / missing fields over HTTP | 422 / 422 | 422 / 422 | ✅ PASS |
-| T9 | `GET /health` | `{"status":"ok"}` | exact match | ✅ PASS |
-| T10 | Background task with no SN credentials | logged, worker survives | `RuntimeError` caught/logged, no crash | ✅ PASS |
-| T11 | Live uvicorn `POST /webhook` (localhost) | 202 in < 2 s | 202 in 0.002 s | ✅ PASS |
-| T12 | Live Gemini key check (printer incident) | `respond` + printer solution | `respond` / "Restart the printer and unplug the cable for 30 seconds." | ✅ PASS |
-| T13 | ngrok tunnel + public `POST /webhook` | 202 in < 2 s via public URL | 202 in 0.11 s | ✅ PASS |
-| T14 | E2E printer (`INC0010001`, 1st attempt) | Resolved with solution | decision=respond, **PATCH → 403** (see §Failure analysis) | ❌ FAIL → fixed |
-| T15 | E2E printer retry (`INC0010002`) | Resolved with solution | state=Resolved, `close_code=Solution provided`, solution in comments, PATCH 200 | ✅ PASS |
-| T16 | E2E vague email (`INC0010003`) | `ask`, stays open, question in comments | state=New, clarifying question in comments, PATCH 200 | ✅ PASS |
-| T17 | E2E leave request (`INC0010004`) | `escalate`, stays open, reason in work_notes | state=New, escalation reason in work_notes, PATCH 200 | ✅ PASS |
+| T1 | Rule-based fallback decisions (no key): printer / vague email / leave | respond / ask / escalate | respond / ask / escalate | PASS |
+| T2 | Write-back payload mapping (respond/ask/escalate keys) | state+close_code+close_notes+comments / comments / work_notes | exact match | PASS |
+| T3 | Pydantic rejection of `priority: 9` | validation error | rejected | PASS |
+| T4 | Idempotency set (`mark_processed`) | 2nd add returns False | confirmed | PASS |
+| T5 | KB articles load | 5 articles | 5 lines loaded | PASS |
+| T6 | `POST /webhook` first delivery (TestClient) | 202 in < 2 s | 202 in 0.053 s, background enqueued once | PASS |
+| T7 | `POST /webhook` duplicate delivery | 202 `{"status":"duplicate"}`, no re-processing | exact match | PASS |
+| T8 | Malformed payload / missing fields over HTTP | 422 / 422 | 422 / 422 | PASS |
+| T9 | `GET /health` | `{"status":"ok"}` | exact match | PASS |
+| T10 | Background task with no SN credentials | logged, worker survives | `RuntimeError` caught/logged, no crash | PASS |
+| T11 | Live uvicorn `POST /webhook` (localhost) | 202 in < 2 s | 202 in 0.002 s | PASS |
+| T12 | Live Gemini key check (printer incident) | `respond` + printer solution | `respond` / "Restart the printer and unplug the cable for 30 seconds." | PASS |
+| T13 | ngrok tunnel + public `POST /webhook` | 202 in < 2 s via public URL | 202 in 0.11 s | PASS |
+| T14 | E2E printer (`INC0010001`, 1st attempt) | Resolved with solution | decision=respond, **PATCH → 403** (see §Failure analysis) | FAIL → fixed |
+| T15 | E2E printer retry (`INC0010002`) | Resolved with solution | state=Resolved, `close_code=Solution provided`, solution in comments, PATCH 200 | PASS |
+| T16 | E2E vague email (`INC0010003`) | `ask`, stays open, question in comments | state=New, clarifying question in comments, PATCH 200 | PASS |
+| T17 | E2E leave request (`INC0010004`) | `escalate`, stays open, reason in work_notes | state=New, escalation reason in work_notes, PATCH 200 | PASS |
 
 Final ticket states (read back from PDI via Table API):
 - `INC0010002`: state=Resolved, close_code="Solution provided",

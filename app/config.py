@@ -1,11 +1,9 @@
-"""Typed environment configuration (NFR2: zero secrets in VCS)."""
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Loads credentials from `.env`. All fields have safe defaults so the
-    service can boot (and be health-checked) without secrets configured."""
+    # Read from .env so secrets never land in git. Empty defaults let the
+    # service boot for health checks even with nothing configured.
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

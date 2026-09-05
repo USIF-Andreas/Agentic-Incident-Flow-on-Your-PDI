@@ -1,13 +1,4 @@
-"""Gemini decision engine (FR3, FR6).
-
-Evaluates incident text strictly against the 5 KB articles and returns a
-structured DecisionResponse. Uses google-genai with a JSON response schema,
-temperature=0.0, and a zero-shot grounding prompt.
-
-If no real GEMINI_API_KEY is configured (local verification without a key),
-falls back to a deterministic rule-based decision that reproduces the three
-expected test outcomes. With a real key, the LLM path is always used.
-"""
+"""Gemini decision engine. Grounds every decision in the 5 KB articles only."""
 
 import asyncio
 import json
@@ -22,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 MODEL_FALLBACKS = ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash")
 
-_KB_CACHE: str | None = None
+_kb_cache: str | None = None
 
 
 def _kb_paths() -> list[Path]:
@@ -34,17 +25,15 @@ def _kb_paths() -> list[Path]:
 
 
 def load_kb_text() -> str:
-    """Load and format the 5 KB articles. Result is cached."""
-    global _KB_CACHE
-    if _KB_CACHE is not None:
-        return _KB_CACHE
+    global _kb_cache
+    if _kb_cache is not None:
+        return _kb_cache
     for path in _kb_paths():
         if path.exists():
             raw = json.loads(path.read_text())
             articles = raw.get("articles", raw) if isinstance(raw, dict) else raw
-            lines = [f"Article {a['id']}: {a['text']}" for a in articles]
-            _KB_CACHE = "\n".join(lines)
-            return _KB_CACHE
+            _kb_cache = "\n".join(f"Article {a['id']}: {a['text']}" for a in articles)
+            return _kb_cache
     raise FileNotFoundError("kb_articles.json not found in data/ or repo root")
 
 
@@ -73,8 +62,8 @@ def _is_placeholder_key() -> bool:
 
 
 def _rule_based_decision(payload: IncidentPayload) -> DecisionResponse:
-    """Deterministic fallback (no API key). Mirrors the LLM decision rules so
-    the three test tickets in test_incidents.json produce expected outcomes."""
+    # No key configured (local dev): same decision rules, hardcoded, so the
+    # three test tickets still come out respond/ask/escalate.
     text = f"{payload.short_description} {payload.description or ''}".lower()
 
     out_of_scope = (
@@ -133,7 +122,6 @@ def _rule_based_decision(payload: IncidentPayload) -> DecisionResponse:
             decision="respond",
             message="Clear your browser cache and try loading the page in incognito mode.",
         )
-    # Related to an article domain but too vague -> ask; else escalate.
     if mentions("system", "access", "network", "browser", "email", "printer"):
         return DecisionResponse(
             decision="ask",
@@ -146,7 +134,7 @@ def _rule_based_decision(payload: IncidentPayload) -> DecisionResponse:
 
 
 def decide_sync(payload: IncidentPayload) -> DecisionResponse:
-    """Blocking LLM call (run via asyncio.to_thread from async code)."""
+    # Blocking call; invoked via asyncio.to_thread so the event loop stays free.
     if _is_placeholder_key():
         logger.warning("GEMINI_API_KEY not configured; using rule-based fallback decision")
         return _rule_based_decision(payload)
@@ -168,9 +156,8 @@ def decide_sync(payload: IncidentPayload) -> DecisionResponse:
                     response_schema=DecisionResponse,
                 ),
             )
-            data = json.loads(response.text or "")
-            return DecisionResponse(**data)
-        except Exception as exc:  # try next model fallback
+            return DecisionResponse(**json.loads(response.text or ""))
+        except Exception as exc:
             last_err = exc
             logger.warning("Gemini model %s failed: %s", model, exc)
     raise RuntimeError(f"All Gemini models failed: {last_err}")

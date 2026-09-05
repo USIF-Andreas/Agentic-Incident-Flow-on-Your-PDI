@@ -1,20 +1,33 @@
 # Agentic Incident Flow on Your PDI
 
-Automated IT incident triage: ServiceNow PDI → FastAPI webhook → Gemini 2.5 Flash decision → write-back to the same ticket. See `PLAN.md` for the full spec and `pdi_guide.md` for the no-experience PDI walkthrough.
+ServiceNow incident triage: a PDI Business Rule POSTs new incidents to a FastAPI webhook, Gemini classifies each one against 5 KB articles, and the service writes the outcome back to the same ticket. Spec in `PLAN.md`, PDI steps in `pdi_guide.md`, results in `TEST_REPORT.md`.
 
-The loop (all automatic, no manual steps between):
+## Architecture
 
 1. Incident created in PDI → async Business Rule POSTs JSON to `/webhook`.
-2. FastAPI validates, returns `202 Accepted` in <2s, enqueues a background task.
-3. Gemini decides `respond | ask | escalate` using only the 5 KB articles.
-4. Service `PATCH`es the same incident (`state=6`+comments, comments, or work_notes).
+2. FastAPI validates, returns `202 Accepted` in <2s, handles the rest in a background task.
+3. Gemini returns `respond | ask | escalate` plus a message, grounded in the 5 KB articles only.
+4. Service `PATCH`es the incident: `respond` closes it (`state=6`) with the solution in comments, `ask` leaves it open with a clarifying question in comments, `escalate` leaves it open with the reason in work notes.
 
 ## Prerequisites
 
 - Python 3.11+
 - A ServiceNow PDI (`https://developer.servicenow.com`, see `pdi_guide.md` Step 1)
-- ngrok (free, for exposing port 8000)
-- A free Gemini API key from Google AI Studio (no credit card): <https://aistudio.google.com>
+- ngrok (free tier is enough, to expose port 8000)
+- A Gemini API key from Google AI Studio: <https://aistudio.google.com>
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and fill in:
+
+| Var | Value |
+| --- | --- |
+| `GEMINI_API_KEY` | key from AI Studio |
+| `SN_INSTANCE_URL` | `https://devXXXXXX.service-now.com` (no trailing slash) |
+| `SN_USER` | `admin` |
+| `SN_PASSWORD` | PDI admin password |
+
+Without a real `GEMINI_API_KEY` the service still runs: it falls back to a deterministic rule-based decision so the three test tickets still produce their expected outcomes.
 
 ## Setup
 
@@ -22,40 +35,25 @@ The loop (all automatic, no manual steps between):
 git clone <this-repo> && cd Agentic-Incident-Flow-on-Your-PDI
 python -m venv .venv && source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env   # then fill in your real values
+cp .env.example .env   # then fill in your values
 ```
-
-`.env` fields:
-
-| Var | Example |
-| --- | --- |
-| `GEMINI_API_KEY` | key from AI Studio |
-| `SN_INSTANCE_URL` | `https://devXXXXXX.service-now.com` (no trailing slash) |
-| `SN_USER` | `admin` |
-| `SN_PASSWORD` | your PDI admin password |
-
-> Without a real `GEMINI_API_KEY` the service still boots and uses a deterministic
-> rule-based fallback so the three test tickets produce their expected decisions.
-> With a real key, the Gemini LLM path is used.
 
 ## Run
 
 ```bash
 uvicorn app.main:app --port 8000
-ngrok http 8000   # copy the https URL, e.g. https://ab12cd34.ngrok-free.app
+ngrok http 8000   # note the https URL, e.g. https://ab12cd34.ngrok-free.app
 ```
 
 Health check: `GET http://localhost:8000/health` → `{"status":"ok"}`.
 
 ## ServiceNow wiring (summary — details in `pdi_guide.md`)
 
-1. PDI → All → **Business Rules** → **New**: Name `Task0 - Send Incident to Agent`, Table `Incident [incident]`, Advanced ✔, When `after`, Insert ✔.
-2. Advanced tab: paste `business_rule.js`, replacing `YOUR_ENDPOINT` with your ngrok URL **keeping** `/webhook` (e.g. `https://ab12cd34.ngrok-free.app/webhook`).
-3. Submit. Create an Incident → watch FastAPI logs; the JSON payload (see `payload_contract.json`) should arrive in seconds. Debug via **System Logs > System Log > All**, search `Task0`.
+1. PDI → All → **Business Rules** → **New**: Name `Task0 - Send Incident to Agent`, Table `Incident [incident]`, Advanced on, When `after`, Insert on.
+2. Advanced tab: paste `business_rule.js`, replacing `YOUR_ENDPOINT` with the ngrok URL, keeping `/webhook` (e.g. `https://ab12cd34.ngrok-free.app/webhook`).
+3. Submit. Create an incident and watch the FastAPI logs — the payload (see `payload_contract.json`) should arrive in seconds. If not, check **System Logs > System Log > All** for `Task0`.
 
 ## Verification
-
-Manual curl (replace `xxx` with a real `sys_id` for a live write-back test):
 
 ```bash
 curl -s -X POST localhost:8000/webhook -H 'Content-Type: application/json' -d '{
@@ -68,27 +66,29 @@ curl -s -X POST localhost:8000/webhook -H 'Content-Type: application/json' -d '{
 # → {"status":"accepted",...} HTTP 202 in well under 2s
 ```
 
-Expected end-to-end outcomes (`test_incidents.json`):
+Expected outcomes (`test_incidents.json`):
 
-| Test | Input | Expected decision | Ticket result |
+| Test | Input | Decision | Ticket result |
 | --- | --- | --- | --- |
 | 1 Printer | "Printer not printing after office move" | `respond` | Resolved (`state=6`, `close_code="Solution provided"`, solution in comments) |
 | 2 Vague email | "Cannot send email" / "It just doesn't work." | `ask` | Still open, clarifying question in comments |
 | 3 Leave request | "Request: annual leave approval" | `escalate` | Still open, reason in work_notes |
 
-Idempotency: re-POST the same payload → `{"status":"duplicate",...}` (202) and no second write-back. Malformed payload (e.g. `priority: 9`) → `422`.
+Re-POSTing the same payload returns `{"status":"duplicate",...}` (202) with no second write-back. Bad payloads (e.g. `priority: 9`) return `422`.
+
+Note: `close_code` must be a valid `sys_choice` value for `incident.close_code` on the target PDI — ours only accepts values like `Solution provided`, anything else trips its Data Policy with a 403.
 
 ## Project layout
 
 ```text
 app/            # config, schemas, main (webhook), gemini_client, servicenow, processor
 data/kb_articles.json  # the 5 KB articles (also at repo root from the asset pack)
-business_rule.js / payload_contract.json / test_incidents.json / pdi_guide.md  # asset pack (unchanged)
-PLAN.md         # spec & build tracking
+business_rule.js / payload_contract.json / test_incidents.json / pdi_guide.md  # asset pack, unchanged
+PLAN.md / TEST_REPORT.md
 ```
 
 ## Notes
 
 - `work_notes` are internal; `comments` are customer-visible (`pdi_guide.md` Step 5).
-- PDI sleeps after inactivity — wake it in the developer portal if the trigger stops.
-- ngrok URL changes on restart — update the Business Rule endpoint each time.
+- PDIs sleep after inactivity — wake the instance in the developer portal if the trigger stops.
+- The ngrok URL changes on restart — update the Business Rule endpoint each time.

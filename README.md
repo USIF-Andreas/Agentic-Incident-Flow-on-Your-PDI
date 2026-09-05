@@ -100,3 +100,19 @@ pdi_guide.md             # step-by-step PDI setup notes from the original task a
 - `work_notes` are internal only, `comments` show up to the customer — mixed these up more than once while testing.
 - PDIs go to sleep after a while if you're not using them, so if the trigger suddenly stops firing, go wake the instance up from the developer portal first before debugging anything else.
 - The ngrok URL changes every time you restart it on the free tier, so remember to update the Business Rule endpoint each time or you'll be staring at silence in the logs for no reason.
+
+## Reflection & Future Improvements
+
+A few things that work fine for a prototype but should be handled differently in production:
+
+1. **Expand KB coverage and sync directly with ServiceNow Knowledge**  
+   The system currently relies on just 5 static articles in a local JSON file, which forces almost anything outside basic printers/passwords into an escalation. In a real environment, the service should periodically sync with ServiceNow's native Knowledge Base (`kb_knowledge` table) or ingest common internal IT SOPs (VPN troubleshooting, software provisioning, SSO issues). That would cut down unnecessary human escalations and allow the agent to resolve a much wider variety of everyday tickets.
+
+2. **Redis for idempotency instead of in-memory set**  
+   Right now the deduplication relies on a plain Python `set` with a thread lock. It works for a single worker, but if the process restarts or we scale horizontally to multiple Uvicorn workers, that state is lost. Moving this to Redis with a basic `SETNX` and a 24-hour TTL would make it stateless and safe across restarts and multiple instances.
+
+3. **A real job queue instead of FastAPI BackgroundTasks**  
+   `BackgroundTasks` runs in-memory. If the app gets killed while waiting on Gemini or the ServiceNow PATCH call, that job is simply dropped. Offloading incoming incidents to Celery, ARQ, or BullMQ backed by Redis/RabbitMQ would give us task persistence, automatic retries with backoff for network drops, and a dead-letter queue for bad tickets.
+
+4. **RAG retrieval instead of dumping all KBs in the prompt**  
+   Hardcoding the 5 KB articles directly into the prompt is fine for a fixed assignment, but it doesn't scale. If the IT desk has hundreds of runbooks, we'd need to store them in a vector DB (like pgvector or Qdrant) and only fetch the top 2-3 relevant chunks per incident to keep token costs down and prevent context clutter.

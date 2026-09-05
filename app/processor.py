@@ -1,5 +1,3 @@
-"""Decides respond/ask/escalate for an incident using only the 5 KB articles."""
-
 import logging
 import threading
 

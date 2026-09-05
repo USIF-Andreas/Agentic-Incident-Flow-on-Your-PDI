@@ -1,5 +1,3 @@
-"""Gemini decision engine. Grounds every decision in the 5 KB articles only."""
-
 import asyncio
 import json
 import logging

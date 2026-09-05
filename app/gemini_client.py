@@ -9,7 +9,7 @@ from .schemas import DecisionResponse, IncidentPayload
 
 logger = logging.getLogger(__name__)
 
-MODEL_FALLBACKS = ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash")
+MODEL_FALLBACKS = ("gemini-2.5-flash", "gemini-3.1-flash", "gemini-3.8-flash")
 
 _kb_cache: str | None = None
 

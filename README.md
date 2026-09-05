@@ -72,7 +72,7 @@ Expected end-to-end outcomes (`test_incidents.json`):
 
 | Test | Input | Expected decision | Ticket result |
 | --- | --- | --- | --- |
-| 1 Printer | "Printer not printing after office move" | `respond` | Resolved (`state=6`, solution in comments) |
+| 1 Printer | "Printer not printing after office move" | `respond` | Resolved (`state=6`, `close_code="Solution provided"`, solution in comments) |
 | 2 Vague email | "Cannot send email" / "It just doesn't work." | `ask` | Still open, clarifying question in comments |
 | 3 Leave request | "Request: annual leave approval" | `escalate` | Still open, reason in work_notes |
 

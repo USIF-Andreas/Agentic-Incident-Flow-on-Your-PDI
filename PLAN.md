@@ -84,11 +84,12 @@ When `decision == "respond"`:
 ```json
 {
   "state": "6",
-  "close_code": "Solved (Permanently)",
+  "close_code": "Solution provided",
   "close_notes": "Resolved automatically by AI Agent using Knowledge Base.",
   "comments": "<Gemini Message>"
 }
 ```
+> `close_code` must be a valid `sys_choice` value for `incident.close_code` on the target PDI (verified: `Solution provided`). Other values trip the PDI Data Policy ("Resolution code is mandatory") → HTTP 403.
 When `decision == "ask"`:
 ```json
 {

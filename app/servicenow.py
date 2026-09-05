@@ -15,7 +15,11 @@ def build_writeback_payload(decision: DecisionResponse) -> dict:
     if decision.decision == "respond":
         return {
             "state": "6",
-            "close_code": "Solved (Permanently)",
+            # NOTE: must be a valid sys_choice value for incident.close_code
+            # on the target PDI (e.g. "Solution provided"). Values like
+            # "Solved (Permanently)" are rejected by this PDI's Data Policy
+            # ("Resolution code is mandatory") with HTTP 403.
+            "close_code": "Solution provided",
             "close_notes": "Resolved automatically by AI Agent using Knowledge Base.",
             "comments": decision.message,
         }

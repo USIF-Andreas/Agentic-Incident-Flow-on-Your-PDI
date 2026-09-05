@@ -1,33 +1,24 @@
 # Agentic Incident Flow on Your PDI
 
-ServiceNow incident triage: a PDI Business Rule POSTs new incidents to a FastAPI webhook, Gemini classifies each one against 5 KB articles, and the service writes the outcome back to the same ticket. Spec in `PLAN.md`, PDI steps in `pdi_guide.md`, results in `TEST_REPORT.md`.
+This is my Task 0 submission — a small ServiceNow incident triage pipeline. The idea: when a new incident is created on a ServiceNow PDI, a Business Rule POSTs it to a FastAPI webhook I built, Gemini looks at the ticket against 5 knowledge base articles and decides what to do with it, and then the service writes the decision back to the same ticket.
 
-## Architecture
+## How it works
 
-1. Incident created in PDI → async Business Rule POSTs JSON to `/webhook`.
-2. FastAPI validates, returns `202 Accepted` in <2s, handles the rest in a background task.
-3. Gemini returns `respond | ask | escalate` plus a message, grounded in the 5 KB articles only.
-4. Service `PATCH`es the incident: `respond` closes it (`state=6`) with the solution in comments, `ask` leaves it open with a clarifying question in comments, `escalate` leaves it open with the reason in work notes.
+1. Incident gets created in the PDI → a Business Rule (async, after insert) POSTs the JSON to `/webhook`.
+2. FastAPI validates the payload and immediately returns `202 Accepted` (under 2s), then does the actual work in a background task so ServiceNow doesn't time out waiting on us.
+3. Gemini looks at the ticket and picks one of three actions — `respond`, `ask`, or `escalate` — plus a message. It's only allowed to use the 5 KB articles, nothing outside that.
+4. Based on the decision, the service PATCHes the incident back:
+   - `respond` → closes it (`state=6`), puts the solution in the comments
+   - `ask` → leaves it open, adds a clarifying question in the comments
+   - `escalate` → leaves it open, adds the reason to work notes
 
-## Prerequisites
+## Before you run it
 
+You'll need:
 - Python 3.11+
-- A ServiceNow PDI (`https://developer.servicenow.com`, see `pdi_guide.md` Step 1)
-- ngrok (free tier is enough, to expose port 8000)
-- A Gemini API key from Google AI Studio: <https://aistudio.google.com>
-
-## Environment Variables
-
-Copy `.env.example` to `.env` and fill in:
-
-| Var | Value |
-| --- | --- |
-| `GEMINI_API_KEY` | key from AI Studio |
-| `SN_INSTANCE_URL` | `https://devXXXXXX.service-now.com` (no trailing slash) |
-| `SN_USER` | `admin` |
-| `SN_PASSWORD` | PDI admin password |
-
-Without a real `GEMINI_API_KEY` the service still runs: it falls back to a deterministic rule-based decision so the three test tickets still produce their expected outcomes.
+- A ServiceNow PDI (get one free at `https://developer.servicenow.com`)
+- ngrok (free tier works fine — needed to expose port 8000 to ServiceNow)
+- A Gemini API key from Google AI Studio (`https://aistudio.google.com`)
 
 ## Setup
 
@@ -35,25 +26,41 @@ Without a real `GEMINI_API_KEY` the service still runs: it falls back to a deter
 git clone <this-repo> && cd Agentic-Incident-Flow-on-Your-PDI
 python -m venv .venv && source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env   # then fill in your values
+cp .env.example .env
 ```
 
-## Run
+Then fill in `.env`:
+
+```
+GEMINI_API_KEY=your key from AI Studio
+SN_INSTANCE_URL=https://devXXXXXX.service-now.com   # no trailing slash
+SN_USER=admin
+SN_PASSWORD=your PDI admin password
+```
+
+One thing worth mentioning — if you don't set a real `GEMINI_API_KEY`, the service doesn't crash. It just falls back to a simple rule-based decision so the three sample tickets still resolve the way they're supposed to. Handy for testing without burning API calls.
+
+## Running it
 
 ```bash
 uvicorn app.main:app --port 8000
-ngrok http 8000   # note the https URL, e.g. https://ab12cd34.ngrok-free.app
+ngrok http 8000
 ```
 
-Health check: `GET http://localhost:8000/health` → `{"status":"ok"}`.
+Grab the https URL ngrok gives you (something like `https://ab12cd34.ngrok-free.app`) — you'll need it for the ServiceNow side.
 
-## ServiceNow wiring (summary — details in `pdi_guide.md`)
+Quick sanity check: `GET http://localhost:8000/health` should return `{"status":"ok"}`.
 
-1. PDI → All → **Business Rules** → **New**: Name `Task0 - Send Incident to Agent`, Table `Incident [incident]`, Advanced on, When `after`, Insert on.
-2. Advanced tab: paste `business_rule.js`, replacing `YOUR_ENDPOINT` with the ngrok URL, keeping `/webhook` (e.g. `https://ab12cd34.ngrok-free.app/webhook`).
-3. Submit. Create an incident and watch the FastAPI logs — the payload (see `payload_contract.json`) should arrive in seconds. If not, check **System Logs > System Log > All** for `Task0`.
+## Wiring it up in ServiceNow
 
-## Verification
+1. In the PDI, go to **System Definition > Business Rules > New**.
+   - Name: `Task0 - Send Incident to Agent`
+   - Table: `Incident [incident]`
+   - Turn on Advanced, set When to `after`, check Insert
+2. In the Advanced tab, paste in `business_rule.js`. Swap `YOUR_ENDPOINT` for your ngrok URL (keep the `/webhook` path at the end).
+3. Save it, then create a test incident and watch your FastAPI terminal — the payload should show up within a couple seconds. If nothing happens, check **System Logs > System Log > All** and filter for `Task0`.
+
+## Testing it manually
 
 ```bash
 curl -s -X POST localhost:8000/webhook -H 'Content-Type: application/json' -d '{
@@ -63,32 +70,49 @@ curl -s -X POST localhost:8000/webhook -H 'Content-Type: application/json' -d '{
   "description": "It was working yesterday. I tried turning it off and on.",
   "priority": 3
 }' -w '\nHTTP %{http_code} time %{time_total}s\n'
-# → {"status":"accepted",...} HTTP 202 in well under 2s
 ```
 
-Expected outcomes (`test_incidents.json`):
+That should come back `202` in well under 2 seconds with `{"status":"accepted",...}`.
 
-| Test | Input | Decision | Ticket result |
-| --- | --- | --- | --- |
-| 1 Printer | "Printer not printing after office move" | `respond` | Resolved (`state=6`, `close_code="Solution provided"`, solution in comments) |
-| 2 Vague email | "Cannot send email" / "It just doesn't work." | `ask` | Still open, clarifying question in comments |
-| 3 Leave request | "Request: annual leave approval" | `escalate` | Still open, reason in work_notes |
+I tested against three scenarios (see `test_incidents.json`):
 
-Re-POSTing the same payload returns `{"status":"duplicate",...}` (202) with no second write-back. Bad payloads (e.g. `priority: 9`) return `422`.
+- **Printer issue** ("Printer not printing after office move") → resolved automatically, `close_code` set to `Solution provided`, solution written to comments.
+- **Vague email complaint** ("Cannot send email" / "It just doesn't work") → left open, Gemini asks a clarifying question in the comments instead of guessing.
+- **Leave request** ("Request: annual leave approval") → left open, escalated with the reason in work notes since it's outside what the KB articles cover.
 
-Note: `close_code` must be a valid `sys_choice` value for `incident.close_code` on the target PDI — ours only accepts values like `Solution provided`, anything else trips its Data Policy with a 403.
+A couple of edge cases I handled: re-sending the same payload just returns `{"status":"duplicate",...}` without touching the ticket again, and a bad payload (e.g. `priority: 9`) gets rejected with a `422` instead of silently failing.
+
+One gotcha I ran into: `close_code` has to match an actual `sys_choice` value configured on the PDI's `incident.close_code` field — mine only accepts `Solution provided`, so anything else trips the Data Policy and comes back as a `403`. Worth checking your own PDI's choices before assuming the value I used will work.
 
 ## Project layout
 
-```text
-app/            # config, schemas, main (webhook), gemini_client, servicenow, processor
-data/kb_articles.json  # the 5 KB articles (also at repo root from the asset pack)
-business_rule.js / payload_contract.json / test_incidents.json / pdi_guide.md  # asset pack, unchanged
-PLAN.md / TEST_REPORT.md
+```
+app/                     # config, schemas, main.py (the webhook), gemini_client, servicenow, processor
+data/kb_articles.json    # the 5 KB articles the agent is grounded on
+business_rule.js
+payload_contract.json
+test_incidents.json
+pdi_guide.md             # step-by-step PDI setup notes from the original task assets
 ```
 
-## Notes
+## Notes to self
 
-- `work_notes` are internal; `comments` are customer-visible (`pdi_guide.md` Step 5).
-- PDIs sleep after inactivity — wake the instance in the developer portal if the trigger stops.
-- The ngrok URL changes on restart — update the Business Rule endpoint each time.
+- `work_notes` are internal only, `comments` show up to the customer — mixed these up more than once while testing.
+- PDIs go to sleep after a while if you're not using them, so if the trigger suddenly stops firing, go wake the instance up from the developer portal first before debugging anything else.
+- The ngrok URL changes every time you restart it on the free tier, so remember to update the Business Rule endpoint each time or you'll be staring at silence in the logs for no reason.
+
+## Reflection & Future Improvements
+
+A few things that work fine for a prototype but should be handled differently in production:
+
+1. **Expand KB coverage and sync directly with ServiceNow Knowledge**  
+   The system currently relies on just 5 static articles in a local JSON file, which forces almost anything outside basic printers/passwords into an escalation. In a real environment, the service should periodically sync with ServiceNow's native Knowledge Base (`kb_knowledge` table) or ingest common internal IT SOPs (VPN troubleshooting, software provisioning, SSO issues). That would cut down unnecessary human escalations and allow the agent to resolve a much wider variety of everyday tickets.
+
+2. **Redis for idempotency instead of in-memory set**  
+   Right now the deduplication relies on a plain Python `set` with a thread lock. It works for a single worker, but if the process restarts or we scale horizontally to multiple Uvicorn workers, that state is lost. Moving this to Redis with a basic `SETNX` and a 24-hour TTL would make it stateless and safe across restarts and multiple instances.
+
+3. **A real job queue instead of FastAPI BackgroundTasks**  
+   `BackgroundTasks` runs in-memory. If the app gets killed while waiting on Gemini or the ServiceNow PATCH call, that job is simply dropped. Offloading incoming incidents to Celery, ARQ, or BullMQ backed by Redis/RabbitMQ would give us task persistence, automatic retries with backoff for network drops, and a dead-letter queue for bad tickets.
+
+4. **RAG retrieval instead of dumping all KBs in the prompt**  
+   Hardcoding the 5 KB articles directly into the prompt is fine for a fixed assignment, but it doesn't scale. If the IT desk has hundreds of runbooks, we'd need to store them in a vector DB (like pgvector or Qdrant) and only fetch the top 2-3 relevant chunks per incident to keep token costs down and prevent context clutter.

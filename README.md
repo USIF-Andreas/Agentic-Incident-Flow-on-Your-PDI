@@ -84,6 +84,24 @@ A couple of edge cases I handled: re-sending the same payload just returns `{"st
 
 One gotcha I ran into: `close_code` has to match an actual `sys_choice` value configured on the PDI's `incident.close_code` field — mine only accepts `Solution provided`, so anything else trips the Data Policy and comes back as a `403`. Worth checking your own PDI's choices before assuming the value I used will work.
 
+## Design Decisions, Challenges & Reflection
+
+### Architecture & Design Decisions
+- **Decoupled Asynchronous Ingestion:** The `/webhook` endpoint intentionally offloads LLM inference and ServiceNow write-backs to `fastapi.BackgroundTasks`, acknowledging deliveries with `202 Accepted` in ~50ms. This prevents blocking ServiceNow's thread pool and comfortably meets the <2s latency requirement.
+- **Thread-Safe Deduplication:** Implemented an in-memory thread-locked set (`mark_processed`) to catch duplicate webhook triggers at zero database cost, protecting against duplicate ticket updates.
+- **Strict Grounding with Structured Outputs:** Forced Gemini 2.5 Flash to output strictly typed JSON (`response_schema=DecisionResponse`) with `temperature=0.0`. Restricting decisions to explicit KB context prevents model hallucinations on out-of-scope enterprise requests.
+- **Fault-Tolerant Fallback:** Configured graceful fallbacks across Gemini model versions, alongside a rule-based deterministic evaluator so the service boots and functions even in restricted offline test environments.
+
+### Real-World Challenges & Debugging
+- **ServiceNow Data Policy 403 Rejection:** During initial end-to-end testing, the `respond` write-back failed with `HTTP 403 Data Policy Exception: Resolution code is mandatory`. While generic documentation suggested `close_code: "Solved (Permanently)"`, inspecting the instance's `sys_choice` table revealed that this specific PDI enforces `Solution provided`. Aligning the payload schema with the instance's choice list resolved the ticket state transition cleanly.
+- **Field Target Isolation:** Distinguishing between customer-facing `comments` (used for `respond` resolutions and `ask` clarifying prompts) versus internal `work_notes` (used for `escalate` routing) ensured customer transparency while preserving private operational context for support engineers.
+
+### Concrete Technical Improvements
+1. **Distributed Idempotency (Redis):** Replace the in-memory set with Redis `SETNX` (with a 24h TTL) to allow horizontal scaling across multiple Uvicorn workers and survive process restarts.
+2. **Persistent Queueing (Celery / BullMQ):** Migrate `BackgroundTasks` to a durable queue broker (RabbitMQ/Redis) with exponential backoff and Dead-Letter Queues (DLQs) to withstand transient ServiceNow network drops.
+3. **Dynamic Vector RAG:** Replace the static prompt-injected KB with semantic vector retrieval (e.g., pgvector / Qdrant), indexing dynamic runbooks and querying the top-k chunks per incident.
+4. **Live ServiceNow KB Sync:** Periodically sync with ServiceNow's native `kb_knowledge` table to ingest real-time enterprise SOPs (VPN setups, SSO errors, hardware provisioning) directly, minimizing unnecessary human escalations.
+
 ## Project layout
 
 ```
